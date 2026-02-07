@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec deno run --allow-run --allow-env "$(dirname "$0")/main.ts" "$@"
