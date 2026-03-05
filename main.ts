@@ -6,6 +6,7 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
+import { Spinner } from "./spinner.ts";
 
 export interface ContributionDay {
   date: string;
@@ -106,7 +107,7 @@ export function formatContributionGraph(
 
   const header = [
     "",
-    `  📊 ${data.totalContributions} contributions in ${year}`,
+    `📊 ${data.totalContributions} contributions in ${year}`,
     "",
   ];
 
@@ -178,14 +179,18 @@ async function main() {
   const username = (args._ as string[])[0]?.toString() ||
     (await getCurrentUsername());
 
-  console.log(`\n  Fetching contributions for @${username}...`);
+  console.log();
+  const spinner = new Spinner(`Fetching contributions for @${username}...`);
+  spinner.start();
 
   try {
     const data = await getContributions(username, year);
+    spinner.succeed(`Fetched contributions for @${username}`);
     for (const line of formatContributionGraph(data, year, month)) {
       console.log(line);
     }
   } catch (error) {
+    spinner.fail(`Failed to fetch contributions`);
     console.error(`\n  ❌ Error: ${(error as Error).message}`);
     Deno.exit(1);
   }

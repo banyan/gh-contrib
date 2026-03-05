@@ -1,15 +1,16 @@
 {
   "name": "@banyan/gh-contrib",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "exports": "./main.ts",
   "tasks": {
     "dev": "deno run --allow-run --allow-env main.ts"
   },
   "imports": {
-    "@std/cli": "jsr:@std/cli@^1.0.27"
+    "@std/cli": "jsr:@std/cli@^1.0.27",
+    "@std/fmt": "jsr:@std/fmt@^1.0.0"
   },
   "publish": {
-    "include": ["main.ts", "deno.json", "LICENSE", "README.md"]
+    "include": ["main.ts", "spinner.ts", "deno.json", "LICENSE", "README.md"]
   }
 }
