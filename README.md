@@ -27,6 +27,20 @@ gh contrib
 deno install -g --allow-run --allow-env jsr:@banyan/gh-contrib
 ```
 
+## Update
+
+### As a gh extension
+
+```bash
+gh extension upgrade gh-contrib
+```
+
+### As a standalone CLI
+
+```bash
+deno install -grf jsr:@banyan/gh-contrib
+```
+
 ## Usage
 
 ```bash
