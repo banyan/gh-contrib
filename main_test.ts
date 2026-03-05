@@ -95,7 +95,7 @@ Deno.test("header shows total contributions from API", () => {
   const lines = formatContributionGraph(data, 2025, 1, "2025-12-31");
 
   assertEquals(
-    lines.includes("  📊 999 contributions in 2025"),
+    lines.includes("📊 999 contributions in 2025"),
     true,
   );
 });
