@@ -7,6 +7,7 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { Spinner } from "./spinner.ts";
+import denoConfig from "./deno.json" with { type: "json" };
 
 export interface ContributionDay {
   date: string;
@@ -30,6 +31,7 @@ Usage: gh-contrib [options] [username]
 Options:
   --year <YYYY>   Year to display (default: current year)
   --month <MM>    Month to display (default: current month)
+  -v, --version   Show version
   -h, --help      Show this help message
 
 Examples:
@@ -163,12 +165,17 @@ async function getCurrentUsername(): Promise<string> {
 async function main() {
   const args = parseArgs(Deno.args, {
     string: ["year", "month"],
-    boolean: ["help"],
-    alias: { h: "help" },
+    boolean: ["help", "version"],
+    alias: { h: "help", v: "version" },
   });
 
   if (args.help) {
     showHelp();
+    Deno.exit(0);
+  }
+
+  if (args.version) {
+    console.log(denoConfig.version);
     Deno.exit(0);
   }
 
