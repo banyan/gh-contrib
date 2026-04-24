@@ -100,7 +100,11 @@ export function formatContributionGraph(
   month?: number,
   today?: string,
 ): string[] {
-  const cutoff = today ?? new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const cutoff = today ??
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${
+      String(now.getDate()).padStart(2, "0")
+    }`;
   const allDays: ContributionDay[] = data.weeks
     .flatMap((w) => w.contributionDays)
     .filter((d) => d.date <= cutoff);
