@@ -44,6 +44,7 @@ Options:
   --year <YYYY>   Year to display (default: current year)
   --month <MM>    Month to display (default: current month)
   --dashboard     Open an HTML dashboard for the year in your browser
+                  (year view only; cannot be combined with --month)
   -v, --version   Show version
   -h, --help      Show this help message
 
@@ -265,6 +266,13 @@ async function main() {
     : args.year
     ? undefined
     : now.getMonth() + 1;
+
+  if (args.dashboard && args.month) {
+    console.error(
+      "\n  ❌ --dashboard is a year-level view and cannot be combined with --month",
+    );
+    Deno.exit(1);
+  }
 
   const username = (args._ as string[])[0]?.toString() ||
     (await getCurrentUsername());

@@ -59,6 +59,7 @@ gh contrib --help                       # Show help
 --year <YYYY>   Year to display (default: current year)
 --month <MM>    Month to display (default: current month)
 --dashboard     Open an HTML dashboard for the year in your browser
+                (year view only; cannot be combined with --month)
 -h, --help      Show help message
 ```
 
@@ -68,7 +69,9 @@ gh contrib --help                       # Show help
 assets, light/dark aware) and opens it in your browser: isometric / flat
 contribution calendar, cumulative pace vs the previous year, 7-day rolling
 average, monthly and weekday breakdowns, distribution stats, and milestone pace.
-Combine with `--year` or a username as usual.
+Combine with `--year` or a username as usual. The dashboard is a year-level
+view: plain `gh contrib --dashboard` shows the full current year (unlike the
+terminal default, which shows the current month), and `--month` is rejected.
 
 ## Development
 
