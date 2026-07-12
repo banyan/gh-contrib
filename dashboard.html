@@ -14,7 +14,7 @@
     --grid:#242923; --axis:#3a403a; --border:rgba(242,244,239,.10);
     --accent:#5cb85f; --accent-hi:#8adf8c; --good:#0ca30c;
     --cmp:#5a605a; --cmp-ink:#8f958b;
-    --l0:#1e231d; --l1:#2a6b31; --l2:#3f9642; --l3:#5cb85f; --l4:#8adf8c; --l5:#b8f2b4;
+    --l0:#1e231d; --l1:#b8f2b4; --l2:#8adf8c; --l3:#5cb85f; --l4:#3f9642; --l5:#2a6b31;
     --tip-bg:#1a1e1a;
   }
 }
@@ -23,7 +23,7 @@
   --grid:#242923; --axis:#3a403a; --border:rgba(242,244,239,.10);
   --accent:#5cb85f; --accent-hi:#8adf8c; --good:#0ca30c;
   --cmp:#5a605a; --cmp-ink:#8f958b;
-  --l0:#1e231d; --l1:#2a6b31; --l2:#3f9642; --l3:#5cb85f; --l4:#8adf8c; --l5:#b8f2b4;
+  --l0:#1e231d; --l1:#b8f2b4; --l2:#8adf8c; --l3:#5cb85f; --l4:#3f9642; --l5:#2a6b31;
   --tip-bg:#1a1e1a;
 }
 :root[data-theme="light"] {
@@ -405,7 +405,7 @@ const lvl = v => { if (v<=0) return 0; let l=1; for (let i=1;i<5;i++) if (v>=th[
 
 // ---- heatmap (isometric) ----
 const LIGHT_RAMP = ["#eceee8","#74c46b","#4aa94a","#328836","#226b28","#124d1b"];
-const DARK_RAMP  = ["#1e231d","#2a6b31","#3f9642","#5cb85f","#8adf8c","#b8f2b4"];
+const DARK_RAMP  = ["#1e231d","#b8f2b4","#8adf8c","#5cb85f","#3f9642","#2a6b31"];
 function isDark(){
   const t = document.documentElement.getAttribute("data-theme");
   if (t) return t === "dark";
