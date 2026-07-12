@@ -12,4 +12,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: denoland/setup-deno@v2
-      - run: deno test
+      - run: deno test --allow-read
