@@ -45,6 +45,8 @@ Options:
   --month <MM>    Month to display (default: current month)
   --dashboard     Open an HTML dashboard for the year in your browser
                   (year view only; cannot be combined with --month)
+  --out <path>    With --dashboard: write the HTML to <path> instead of
+                  opening a browser (for cron / serving the file)
   -v, --version   Show version
   -h, --help      Show this help message
 
@@ -244,7 +246,7 @@ async function getCurrentUsername(): Promise<string> {
 
 async function main() {
   const args = parseArgs(Deno.args, {
-    string: ["year", "month"],
+    string: ["year", "month", "out"],
     boolean: ["help", "version", "dashboard"],
     alias: { h: "help", v: "version" },
   });
@@ -274,6 +276,11 @@ async function main() {
     Deno.exit(1);
   }
 
+  if (args.out && !args.dashboard) {
+    console.error("\n  ❌ --out only makes sense with --dashboard");
+    Deno.exit(1);
+  }
+
   const username = (args._ as string[])[0]?.toString() ||
     (await getCurrentUsername());
 
@@ -289,7 +296,7 @@ async function main() {
       ]);
       spinner.succeed(`Fetched contributions for @${username}`);
       const data = buildDashboardData(current, previous, { username, year });
-      const outPath = await Deno.makeTempFile({
+      const outPath = args.out ?? await Deno.makeTempFile({
         prefix: "gh-contrib-",
         suffix: ".html",
       });
@@ -297,7 +304,7 @@ async function main() {
         outPath,
         renderDashboardHtml(DASHBOARD_TEMPLATE, data),
       );
-      await openInBrowser(outPath);
+      if (!args.out) await openInBrowser(outPath);
       console.log(`\n  📊 ${year} dashboard for @${username}: ${outPath}`);
     } else {
       const data = await getContributions(username, year);
