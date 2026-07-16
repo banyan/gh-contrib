@@ -59,6 +59,27 @@ Examples:
 `);
 }
 
+async function runGh(
+  args: string[],
+): Promise<{ code: number; stdout: Uint8Array; stderr: Uint8Array }> {
+  const cmd = new Deno.Command("gh", {
+    args,
+    stdout: "piped",
+    stderr: "piped",
+  });
+
+  try {
+    return await cmd.output();
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      throw new Error(
+        "gh command not found. Install GitHub CLI: https://cli.github.com",
+      );
+    }
+    throw error;
+  }
+}
+
 async function getContributions(
   username: string,
   year: number,
@@ -86,32 +107,32 @@ async function getContributions(
     }
   `;
 
-  const cmd = new Deno.Command("gh", {
-    args: [
-      "api",
-      "graphql",
-      "-f",
-      `query=${query}`,
-      "-F",
-      `username=${username}`,
-      "-f",
-      `from=${from}`,
-      "-f",
-      `to=${to}`,
-    ],
-    stdout: "piped",
-    stderr: "piped",
-  });
-
-  const { code, stdout, stderr } = await cmd.output();
+  const { code, stdout, stderr } = await runGh([
+    "api",
+    "graphql",
+    "-f",
+    `query=${query}`,
+    "-F",
+    `username=${username}`,
+    "-f",
+    `from=${from}`,
+    "-f",
+    `to=${to}`,
+  ]);
 
   if (code !== 0) {
-    const errorText = new TextDecoder().decode(stderr);
+    const errorText = new TextDecoder().decode(stderr).trim();
+    if (errorText.includes("Could not resolve to a User")) {
+      throw new Error(`User "${username}" not found on GitHub`);
+    }
     throw new Error(`Failed to fetch contributions: ${errorText}`);
   }
 
   const response = JSON.parse(new TextDecoder().decode(stdout));
-  const collection = response.data.user.contributionsCollection;
+  const collection = response.data?.user?.contributionsCollection;
+  if (!collection) {
+    throw new Error(`No contribution data returned for "${username}"`);
+  }
   return {
     ...collection.contributionCalendar,
     restrictedContributions: collection.restrictedContributionsCount,
@@ -227,21 +248,24 @@ async function openInBrowser(path: string): Promise<void> {
 }
 
 async function getCurrentUsername(): Promise<string> {
-  const cmd = new Deno.Command("gh", {
-    args: ["api", "user", "-q", ".login"],
-    stdout: "piped",
-    stderr: "piped",
-  });
-
-  const { code, stdout } = await cmd.output();
+  const { code, stdout, stderr } = await runGh(["api", "user", "-q", ".login"]);
 
   if (code !== 0) {
+    const detail = new TextDecoder().decode(stderr).trim();
     throw new Error(
-      "Failed to get current user. Make sure you're logged in with `gh auth login`",
+      [
+        "Failed to get current user. Make sure you're logged in with `gh auth login`",
+        detail,
+      ].filter(Boolean).join("\n\n  "),
     );
   }
 
   return new TextDecoder().decode(stdout).trim();
+}
+
+function fail(message: string): never {
+  console.error(`\n  ❌ ${message}`);
+  Deno.exit(1);
 }
 
 async function main() {
@@ -269,20 +293,32 @@ async function main() {
     ? undefined
     : now.getMonth() + 1;
 
+  if (Number.isNaN(year)) {
+    fail(`Invalid --year: ${args.year}`);
+  }
+
+  if (month !== undefined && (Number.isNaN(month) || month < 1 || month > 12)) {
+    fail(`Invalid --month: ${args.month} (expected 1-12)`);
+  }
+
   if (args.dashboard && args.month) {
-    console.error(
-      "\n  ❌ --dashboard is a year-level view and cannot be combined with --month",
+    fail(
+      "--dashboard is a year-level view and cannot be combined with --month",
     );
-    Deno.exit(1);
   }
 
   if (args.out && !args.dashboard) {
-    console.error("\n  ❌ --out only makes sense with --dashboard");
-    Deno.exit(1);
+    fail("--out only makes sense with --dashboard");
   }
 
-  const username = (args._ as string[])[0]?.toString() ||
-    (await getCurrentUsername());
+  let username = (args._ as string[])[0]?.toString();
+  if (!username) {
+    try {
+      username = await getCurrentUsername();
+    } catch (error) {
+      fail((error as Error).message);
+    }
+  }
 
   console.log();
   const spinner = new Spinner(`Fetching contributions for @${username}...`);
@@ -315,11 +351,12 @@ async function main() {
     }
   } catch (error) {
     spinner.fail(`Failed to fetch contributions`);
-    console.error(`\n  ❌ Error: ${(error as Error).message}`);
-    Deno.exit(1);
+    fail((error as Error).message);
   }
 }
 
 if (import.meta.main) {
-  main();
+  main().catch((error) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
 }
