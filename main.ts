@@ -80,6 +80,15 @@ async function runGh(
   }
 }
 
+function withStatusHint(message: string): string {
+  const looksLikeGitHubOutage =
+    /HTTP 5\d\d|resource limits|invalid character '<'|something went wrong/i
+      .test(message);
+  return looksLikeGitHubOutage
+    ? `${message}\n\n  GitHub may be having issues: https://www.githubstatus.com/`
+    : message;
+}
+
 async function getContributions(
   username: string,
   year: number,
@@ -125,7 +134,9 @@ async function getContributions(
     if (errorText.includes("Could not resolve to a User")) {
       throw new Error(`User "${username}" not found on GitHub`);
     }
-    throw new Error(`Failed to fetch contributions: ${errorText}`);
+    throw new Error(
+      withStatusHint(`Failed to fetch contributions: ${errorText}`),
+    );
   }
 
   const response = JSON.parse(new TextDecoder().decode(stdout));
@@ -262,12 +273,14 @@ async function getCurrentUsername(): Promise<string> {
     const isAuthError = /auth login|HTTP 401|Bad credentials|authentication/i
       .test(detail);
     throw new Error(
-      [
-        isAuthError
-          ? "Not logged in to GitHub. Run `gh auth login` first"
-          : "Failed to get current user",
-        detail,
-      ].filter(Boolean).join("\n\n  "),
+      withStatusHint(
+        [
+          isAuthError
+            ? "Not logged in to GitHub. Run `gh auth login` first"
+            : "Failed to get current user",
+          detail,
+        ].filter(Boolean).join("\n\n  "),
+      ),
     );
   }
 
