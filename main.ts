@@ -248,19 +248,34 @@ async function openInBrowser(path: string): Promise<void> {
 }
 
 async function getCurrentUsername(): Promise<string> {
-  const { code, stdout, stderr } = await runGh(["api", "user", "-q", ".login"]);
+  const { code, stdout, stderr } = await runGh([
+    "api",
+    "graphql",
+    "-f",
+    "query=query { viewer { login } }",
+    "-q",
+    ".data.viewer.login",
+  ]);
 
   if (code !== 0) {
     const detail = new TextDecoder().decode(stderr).trim();
+    const isAuthError = /auth login|HTTP 401|Bad credentials|authentication/i
+      .test(detail);
     throw new Error(
       [
-        "Failed to get current user. Make sure you're logged in with `gh auth login`",
+        isAuthError
+          ? "Not logged in to GitHub. Run `gh auth login` first"
+          : "Failed to get current user",
         detail,
       ].filter(Boolean).join("\n\n  "),
     );
   }
 
-  return new TextDecoder().decode(stdout).trim();
+  const login = new TextDecoder().decode(stdout).trim();
+  if (!login) {
+    throw new Error("Failed to get current user (empty response from gh)");
+  }
+  return login;
 }
 
 function fail(message: string): never {
