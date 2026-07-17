@@ -150,9 +150,8 @@ const CALENDAR_FIELDS = `contributionCalendar {
 // The compute cost GitHub charges a contributionCalendar query is
 // proportional to the number of contributions in the requested range, and
 // past roughly 4k contributions the query deterministically fails with
-// RESOURCE_LIMITS_EXCEEDED. When that happens, bisect the range and fetch
-// the halves sequentially — low-activity users stay at one request, heavy
-// ones converge on ranges cheap enough to pass.
+// RESOURCE_LIMITS_EXCEEDED. Bisection here is only a safety net for when a
+// single chunk somehow exceeds that; the normal path never triggers it.
 async function fetchCalendarRange(
   username: string,
   from: string,
@@ -200,18 +199,61 @@ async function fetchCalendarRange(
   }
 }
 
+const CHUNK_MONTHS = 2;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function zeroDays(
+  fromDate: string,
+  toDate: string,
+): { total: number; days: ContributionDay[] } {
+  const days: ContributionDay[] = [];
+  for (let t = Date.parse(fromDate); t <= Date.parse(toDate); t += DAY_MS) {
+    days.push({
+      date: new Date(t).toISOString().slice(0, 10),
+      contributionCount: 0,
+      contributionLevel: "NONE",
+    });
+  }
+  return { total: 0, days };
+}
+
+// Fetch the year as fixed 2-month chunks, all in parallel: individual
+// chunks stay far below the resource limit at any realistic contribution
+// volume (and cheap queries are safe to run concurrently — only
+// over-the-limit ones ever failed in parallel). Chunks entirely in the
+// future are zero-filled locally instead of queried.
 async function getContributions(
   username: string,
   year: number,
 ): Promise<ContributionData> {
-  const { total, days } = await fetchCalendarRange(
-    username,
-    `${year}-01-01T00:00:00Z`,
-    `${year}-12-31T23:59:59Z`,
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const horizon = new Date(Date.now() + 2 * DAY_MS).toISOString().slice(0, 10);
+
+  const chunks = [];
+  for (let month = 1; month <= 12; month += CHUNK_MONTHS) {
+    const endMonth = Math.min(month + CHUNK_MONTHS - 1, 12);
+    const endDay = new Date(Date.UTC(year, endMonth, 0)).getUTCDate();
+    chunks.push({
+      fromDate: `${year}-${pad(month)}-01`,
+      toDate: `${year}-${pad(endMonth)}-${pad(endDay)}`,
+    });
+  }
+
+  const results = await Promise.all(
+    chunks.map((c) =>
+      c.fromDate > horizon
+        ? Promise.resolve(zeroDays(c.fromDate, c.toDate))
+        : fetchCalendarRange(
+          username,
+          `${c.fromDate}T00:00:00Z`,
+          `${c.toDate}T23:59:59Z`,
+        )
+    ),
   );
+
   return {
-    totalContributions: total,
-    weeks: [{ contributionDays: days }],
+    totalContributions: results.reduce((s, r) => s + r.total, 0),
+    weeks: [{ contributionDays: results.flatMap((r) => r.days) }],
   };
 }
 
@@ -438,12 +480,12 @@ async function main() {
     if (args.dashboard) {
       // Only the current year's restricted count is displayed, so don't
       // spend a request on the previous year's.
-      const current = await getContributions(username, year);
-      current.restrictedContributions = await getRestrictedCount(
-        username,
-        year,
-      );
-      const previous = await getContributions(username, year - 1);
+      const [current, restricted, previous] = await Promise.all([
+        getContributions(username, year),
+        getRestrictedCount(username, year),
+        getContributions(username, year - 1),
+      ]);
+      current.restrictedContributions = restricted;
       spinner.succeed(`Fetched contributions for @${username}`);
       const data = buildDashboardData(current, previous, { username, year });
       const outPath = args.out ?? await Deno.makeTempFile({
