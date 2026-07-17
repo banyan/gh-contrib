@@ -91,7 +91,8 @@ function withStatusHint(message: string): string {
 
 async function fetchContributionsCollection(
   username: string,
-  year: number,
+  from: string,
+  to: string,
   fields: string,
 ): Promise<Record<string, unknown>> {
   const query = `
@@ -112,9 +113,9 @@ async function fetchContributionsCollection(
     "-F",
     `username=${username}`,
     "-f",
-    `from=${year}-01-01T00:00:00Z`,
+    `from=${from}`,
     "-f",
-    `to=${year}-12-31T23:59:59Z`,
+    `to=${to}`,
   ]);
 
   if (code !== 0) {
@@ -135,39 +136,97 @@ async function fetchContributionsCollection(
   return collection;
 }
 
-// restrictedContributionsCount and contributionCalendar must be fetched in
-// separate, sequential requests: combining them in one query — or running
-// the requests concurrently — hits GitHub's RESOURCE_LIMITS_EXCEEDED once
-// the account's contribution volume is high enough, even though each field
-// alone is fine.
+const CALENDAR_FIELDS = `contributionCalendar {
+  totalContributions
+  weeks {
+    contributionDays {
+      date
+      contributionCount
+      contributionLevel
+    }
+  }
+}`;
+
+// The compute cost GitHub charges a contributionCalendar query is
+// proportional to the number of contributions in the requested range, and
+// past roughly 4k contributions the query deterministically fails with
+// RESOURCE_LIMITS_EXCEEDED. When that happens, bisect the range and fetch
+// the halves sequentially — low-activity users stay at one request, heavy
+// ones converge on ranges cheap enough to pass.
+async function fetchCalendarRange(
+  username: string,
+  from: string,
+  to: string,
+): Promise<{ total: number; days: ContributionDay[] }> {
+  try {
+    const collection = await fetchContributionsCollection(
+      username,
+      from,
+      to,
+      CALENDAR_FIELDS,
+    );
+    const calendar = collection.contributionCalendar as ContributionData;
+    return {
+      total: calendar.totalContributions,
+      days: calendar.weeks.flatMap((w) => w.contributionDays),
+    };
+  } catch (error) {
+    const fromMs = Date.parse(from);
+    const toMs = Date.parse(to);
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+    if (
+      !/resource limits/i.test((error as Error).message) ||
+      toMs - fromMs < thirtyDays
+    ) {
+      throw error;
+    }
+    const midDate = new Date((fromMs + toMs) / 2).toISOString().slice(0, 10);
+    const nextDate = new Date(Date.parse(midDate) + 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 10);
+    const first = await fetchCalendarRange(
+      username,
+      from,
+      `${midDate}T23:59:59Z`,
+    );
+    const second = await fetchCalendarRange(
+      username,
+      `${nextDate}T00:00:00Z`,
+      to,
+    );
+    return {
+      total: first.total + second.total,
+      days: [...first.days, ...second.days],
+    };
+  }
+}
+
 async function getContributions(
   username: string,
   year: number,
 ): Promise<ContributionData> {
-  const calendar = await fetchContributionsCollection(
+  const { total, days } = await fetchCalendarRange(
     username,
-    year,
-    `contributionCalendar {
-      totalContributions
-      weeks {
-        contributionDays {
-          date
-          contributionCount
-          contributionLevel
-        }
-      }
-    }`,
+    `${year}-01-01T00:00:00Z`,
+    `${year}-12-31T23:59:59Z`,
   );
-  return calendar.contributionCalendar as ContributionData;
+  return {
+    totalContributions: total,
+    weeks: [{ contributionDays: days }],
+  };
 }
 
+// Kept out of the calendar query on purpose: requesting
+// restrictedContributionsCount alongside contributionCalendar doubles the
+// query's compute cost and made the combined query fail long before the
+// calendar alone did.
 async function getRestrictedCount(
   username: string,
   year: number,
 ): Promise<number> {
   const collection = await fetchContributionsCollection(
     username,
-    year,
+    `${year}-01-01T00:00:00Z`,
+    `${year}-12-31T23:59:59Z`,
     "restrictedContributionsCount",
   );
   return collection.restrictedContributionsCount as number;
