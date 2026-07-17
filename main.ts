@@ -89,28 +89,16 @@ function withStatusHint(message: string): string {
     : message;
 }
 
-async function getContributions(
+async function fetchContributionsCollection(
   username: string,
   year: number,
-): Promise<ContributionData> {
-  const from = `${year}-01-01T00:00:00Z`;
-  const to = `${year}-12-31T23:59:59Z`;
-
+  fields: string,
+): Promise<Record<string, unknown>> {
   const query = `
     query($username: String!, $from: DateTime!, $to: DateTime!) {
       user(login: $username) {
         contributionsCollection(from: $from, to: $to) {
-          restrictedContributionsCount
-          contributionCalendar {
-            totalContributions
-            weeks {
-              contributionDays {
-                date
-                contributionCount
-                contributionLevel
-              }
-            }
-          }
+          ${fields}
         }
       }
     }
@@ -124,9 +112,9 @@ async function getContributions(
     "-F",
     `username=${username}`,
     "-f",
-    `from=${from}`,
+    `from=${year}-01-01T00:00:00Z`,
     "-f",
-    `to=${to}`,
+    `to=${year}-12-31T23:59:59Z`,
   ]);
 
   if (code !== 0) {
@@ -144,10 +132,45 @@ async function getContributions(
   if (!collection) {
     throw new Error(`No contribution data returned for "${username}"`);
   }
-  return {
-    ...collection.contributionCalendar,
-    restrictedContributions: collection.restrictedContributionsCount,
-  };
+  return collection;
+}
+
+// restrictedContributionsCount and contributionCalendar must be fetched in
+// separate, sequential requests: combining them in one query — or running
+// the requests concurrently — hits GitHub's RESOURCE_LIMITS_EXCEEDED once
+// the account's contribution volume is high enough, even though each field
+// alone is fine.
+async function getContributions(
+  username: string,
+  year: number,
+): Promise<ContributionData> {
+  const calendar = await fetchContributionsCollection(
+    username,
+    year,
+    `contributionCalendar {
+      totalContributions
+      weeks {
+        contributionDays {
+          date
+          contributionCount
+          contributionLevel
+        }
+      }
+    }`,
+  );
+  return calendar.contributionCalendar as ContributionData;
+}
+
+async function getRestrictedCount(
+  username: string,
+  year: number,
+): Promise<number> {
+  const collection = await fetchContributionsCollection(
+    username,
+    year,
+    "restrictedContributionsCount",
+  );
+  return collection.restrictedContributionsCount as number;
 }
 
 export function localToday(now: Date = new Date()): string {
@@ -354,10 +377,14 @@ async function main() {
 
   try {
     if (args.dashboard) {
-      const [current, previous] = await Promise.all([
-        getContributions(username, year),
-        getContributions(username, year - 1),
-      ]);
+      // Only the current year's restricted count is displayed, so don't
+      // spend a request on the previous year's.
+      const current = await getContributions(username, year);
+      current.restrictedContributions = await getRestrictedCount(
+        username,
+        year,
+      );
+      const previous = await getContributions(username, year - 1);
       spinner.succeed(`Fetched contributions for @${username}`);
       const data = buildDashboardData(current, previous, { username, year });
       const outPath = args.out ?? await Deno.makeTempFile({
