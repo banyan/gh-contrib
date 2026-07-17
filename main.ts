@@ -7,7 +7,6 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { Spinner } from "./spinner.ts";
-import { DASHBOARD_TEMPLATE } from "./dashboard_template.ts";
 import denoConfig from "./deno.json" with { type: "json" };
 
 export interface ContributionDay {
@@ -26,16 +25,6 @@ export interface ContributionData {
   restrictedContributions?: number;
 }
 
-export interface DashboardData {
-  username: string;
-  year: number;
-  prevYear: number;
-  generatedAt: string;
-  asOfIndex: number;
-  current: { counts: number[]; restricted?: number };
-  previous: { counts: number[] };
-}
-
 function showHelp(): void {
   console.log(`
 Usage: gh-contrib [options] [username]
@@ -43,10 +32,6 @@ Usage: gh-contrib [options] [username]
 Options:
   --year <YYYY>   Year to display (default: current year)
   --month <MM>    Month to display (default: current month)
-  --dashboard     Open an HTML dashboard for the year in your browser
-                  (year view only; cannot be combined with --month)
-  --out <path>    With --dashboard: write the HTML to <path> instead of
-                  opening a browser (for cron / serving the file)
   -v, --version   Show version
   -h, --help      Show this help message
 
@@ -54,7 +39,6 @@ Examples:
   gh-contrib
   gh-contrib --year 2025
   gh-contrib --year 2025 --month 6
-  gh-contrib --dashboard
   gh-contrib octocat
 `);
 }
@@ -257,23 +241,6 @@ async function getContributions(
   };
 }
 
-// Kept out of the calendar query on purpose: requesting
-// restrictedContributionsCount alongside contributionCalendar doubles the
-// query's compute cost and made the combined query fail long before the
-// calendar alone did.
-async function getRestrictedCount(
-  username: string,
-  year: number,
-): Promise<number> {
-  const collection = await fetchContributionsCollection(
-    username,
-    `${year}-01-01T00:00:00Z`,
-    `${year}-12-31T23:59:59Z`,
-    "restrictedContributionsCount",
-  );
-  return collection.restrictedContributionsCount as number;
-}
-
 export function localToday(now: Date = new Date()): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${
     String(now.getDate()).padStart(2, "0")
@@ -326,62 +293,6 @@ export function formatContributionGraph(
   ];
 }
 
-export function toDailyCounts(data: ContributionData): ContributionDay[] {
-  return data.weeks
-    .flatMap((w) => w.contributionDays)
-    .sort((a, b) => a.date.localeCompare(b.date));
-}
-
-export function buildDashboardData(
-  current: ContributionData,
-  previous: ContributionData,
-  opts: { username: string; year: number; today?: string },
-): DashboardData {
-  const cutoff = opts.today ?? localToday();
-  const days = toDailyCounts(current);
-  let asOfIndex = 0;
-  for (let i = 0; i < days.length; i++) {
-    if (days[i].date <= cutoff) asOfIndex = i;
-  }
-  return {
-    username: opts.username,
-    year: opts.year,
-    prevYear: opts.year - 1,
-    generatedAt: cutoff,
-    asOfIndex,
-    current: {
-      counts: days.map((d) => d.contributionCount),
-      restricted: current.restrictedContributions,
-    },
-    previous: {
-      counts: toDailyCounts(previous).map((d) => d.contributionCount),
-    },
-  };
-}
-
-export function renderDashboardHtml(
-  template: string,
-  data: DashboardData,
-): string {
-  const esc = (s: string) =>
-    s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-  return template
-    .replace("__DATA__", JSON.stringify(data).replaceAll("</", "<\\/"))
-    .replaceAll("{{YEAR}}", String(data.year))
-    .replaceAll("{{PREV}}", String(data.prevYear))
-    .replaceAll("{{USER}}", esc(data.username))
-    .replaceAll("{{GENERATED}}", esc(data.generatedAt));
-}
-
-async function openInBrowser(path: string): Promise<void> {
-  const [cmd, ...cmdArgs] = Deno.build.os === "darwin"
-    ? ["open", path]
-    : Deno.build.os === "windows"
-    ? ["cmd", "/c", "start", "", path]
-    : ["xdg-open", path];
-  await new Deno.Command(cmd, { args: cmdArgs }).output();
-}
-
 async function getCurrentUsername(): Promise<string> {
   const { code, stdout, stderr } = await runGh([
     "api",
@@ -422,8 +333,8 @@ function fail(message: string): never {
 
 async function main() {
   const args = parseArgs(Deno.args, {
-    string: ["year", "month", "out"],
-    boolean: ["help", "version", "dashboard"],
+    string: ["year", "month"],
+    boolean: ["help", "version"],
     alias: { h: "help", v: "version" },
   });
 
@@ -453,16 +364,6 @@ async function main() {
     fail(`Invalid --month: ${args.month} (expected 1-12)`);
   }
 
-  if (args.dashboard && args.month) {
-    fail(
-      "--dashboard is a year-level view and cannot be combined with --month",
-    );
-  }
-
-  if (args.out && !args.dashboard) {
-    fail("--out only makes sense with --dashboard");
-  }
-
   let username = (args._ as string[])[0]?.toString();
   if (!username) {
     try {
@@ -477,33 +378,10 @@ async function main() {
   spinner.start();
 
   try {
-    if (args.dashboard) {
-      // Only the current year's restricted count is displayed, so don't
-      // spend a request on the previous year's.
-      const [current, restricted, previous] = await Promise.all([
-        getContributions(username, year),
-        getRestrictedCount(username, year),
-        getContributions(username, year - 1),
-      ]);
-      current.restrictedContributions = restricted;
-      spinner.succeed(`Fetched contributions for @${username}`);
-      const data = buildDashboardData(current, previous, { username, year });
-      const outPath = args.out ?? await Deno.makeTempFile({
-        prefix: "gh-contrib-",
-        suffix: ".html",
-      });
-      await Deno.writeTextFile(
-        outPath,
-        renderDashboardHtml(DASHBOARD_TEMPLATE, data),
-      );
-      if (!args.out) await openInBrowser(outPath);
-      console.log(`\n  📊 ${year} dashboard for @${username}: ${outPath}`);
-    } else {
-      const data = await getContributions(username, year);
-      spinner.succeed(`Fetched contributions for @${username}`);
-      for (const line of formatContributionGraph(data, year, month)) {
-        console.log(line);
-      }
+    const data = await getContributions(username, year);
+    spinner.succeed(`Fetched contributions for @${username}`);
+    for (const line of formatContributionGraph(data, year, month)) {
+      console.log(line);
     }
   } catch (error) {
     spinner.fail(`Failed to fetch contributions`);

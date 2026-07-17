@@ -4,15 +4,8 @@
   "license": "MIT",
   "exports": "./main.ts",
   "tasks": {
-    "dev": "deno run --allow-run --allow-env --allow-write main.ts",
-    "template": "deno run --allow-read --allow-write scripts/build_template.ts",
+    "dev": "deno run --allow-run --allow-env main.ts",
     "test": "deno test --allow-read"
-  },
-  "fmt": {
-    "exclude": ["dashboard.html", "dashboard_template.ts"]
-  },
-  "lint": {
-    "exclude": ["dashboard_template.ts"]
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.0",
@@ -23,7 +16,6 @@
     "include": [
       "main.ts",
       "spinner.ts",
-      "dashboard_template.ts",
       "deno.json",
       "LICENSE",
       "README.md"
