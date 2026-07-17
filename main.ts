@@ -82,7 +82,7 @@ async function runGh(
 
 function withStatusHint(message: string): string {
   const looksLikeGitHubOutage =
-    /HTTP 5\d\d|resource limits|invalid character '<'|something went wrong/i
+    /HTTP 5\d\d|invalid character '<'|something went wrong/i
       .test(message);
   return looksLikeGitHubOutage
     ? `${message}\n\n  GitHub may be having issues: https://www.githubstatus.com/`
