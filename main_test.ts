@@ -1,5 +1,10 @@
 import { assertEquals } from "@std/assert";
-import { type ContributionData, formatContributionGraph } from "./main.ts";
+import {
+  chunkQueryTo,
+  type ContributionData,
+  formatContributionGraph,
+  padTrailingDays,
+} from "./main.ts";
 
 function makeData(
   days: { date: string; count: number }[],
@@ -94,5 +99,72 @@ Deno.test("header shows total contributions from API", () => {
   assertEquals(
     lines.includes("📊 999 contributions in 2025"),
     true,
+  );
+});
+
+Deno.test("chunkQueryTo keeps the month-end `to` for a past chunk", () => {
+  const now = Date.parse("2026-08-05T04:00:00Z");
+  assertEquals(
+    chunkQueryTo("2026-05-01", "2026-06-30", now),
+    "2026-06-30T23:59:59Z",
+  );
+});
+
+Deno.test("chunkQueryTo clamps the in-progress chunk to now", () => {
+  const now = Date.parse("2026-08-05T04:56:07Z");
+  assertEquals(
+    chunkQueryTo("2026-07-01", "2026-08-31", now),
+    "2026-08-05T04:56:07Z",
+  );
+});
+
+Deno.test("chunkQueryTo covers the first day of a chunk starting after now", () => {
+  const now = Date.parse("2026-06-30T20:00:00Z");
+  assertEquals(
+    chunkQueryTo("2026-07-01", "2026-08-31", now),
+    "2026-07-02T00:00:00Z",
+  );
+});
+
+Deno.test("padTrailingDays zero-fills days the clamped query did not cover", () => {
+  const result = padTrailingDays(
+    {
+      total: 8,
+      days: [
+        { date: "2026-07-01", contributionCount: 8, contributionLevel: "NONE" },
+      ],
+    },
+    "2026-07-01",
+    "2026-07-04",
+  );
+  assertEquals(result.total, 8);
+  assertEquals(
+    result.days.map((d) => `${d.date}:${d.contributionCount}`),
+    ["2026-07-01:8", "2026-07-02:0", "2026-07-03:0", "2026-07-04:0"],
+  );
+});
+
+Deno.test("padTrailingDays leaves a fully covered chunk unchanged", () => {
+  const days = [
+    { date: "2026-07-03", contributionCount: 2, contributionLevel: "NONE" },
+    { date: "2026-07-04", contributionCount: 1, contributionLevel: "NONE" },
+  ];
+  const result = padTrailingDays(
+    { total: 3, days },
+    "2026-07-03",
+    "2026-07-04",
+  );
+  assertEquals(result.days, days);
+});
+
+Deno.test("padTrailingDays fills the whole range when nothing was returned", () => {
+  const result = padTrailingDays(
+    { total: 0, days: [] },
+    "2026-07-01",
+    "2026-07-03",
+  );
+  assertEquals(
+    result.days.map((d) => d.date),
+    ["2026-07-01", "2026-07-02", "2026-07-03"],
   );
 });

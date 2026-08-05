@@ -201,6 +201,43 @@ function zeroDays(
   return { total: 0, days };
 }
 
+// GitHub caches contributionCalendar responses by the exact (user, from, to)
+// range for hours, so a chunk whose `to` sits at a fixed month end keeps
+// hitting the same stale cache entry and understates recent days. Clamping
+// `to` of the in-progress chunk to the current time changes the cache key
+// every run, which forces a fresh computation. The lower bound of one day
+// past the chunk start keeps the range valid (and the first day fully
+// covered) for a chunk that starts within the pre-fetch horizon but after
+// `now`.
+export function chunkQueryTo(
+  fromDate: string,
+  toDate: string,
+  nowMs: number,
+): string {
+  const endMs = Date.parse(`${toDate}T23:59:59Z`);
+  const clampedMs = Math.min(
+    endMs,
+    Math.max(nowMs, Date.parse(`${fromDate}T00:00:00Z`) + DAY_MS),
+  );
+  return clampedMs === endMs
+    ? `${toDate}T23:59:59Z`
+    : new Date(clampedMs).toISOString().slice(0, 19) + "Z";
+}
+
+// A clamped query only returns days up to the clamp; zero-fill the missing
+// tail so chunks always span their full range, like unclamped ones.
+export function padTrailingDays(
+  result: { total: number; days: ContributionDay[] },
+  fromDate: string,
+  toDate: string,
+): { total: number; days: ContributionDay[] } {
+  const last = result.days[result.days.length - 1]?.date;
+  const nextMs = last ? Date.parse(last) + DAY_MS : Date.parse(fromDate);
+  if (nextMs > Date.parse(toDate)) return result;
+  const fill = zeroDays(new Date(nextMs).toISOString().slice(0, 10), toDate);
+  return { total: result.total, days: [...result.days, ...fill.days] };
+}
+
 // Fetch the year as fixed 2-month chunks, all in parallel: individual
 // chunks stay far below the resource limit at any realistic contribution
 // volume (and cheap queries are safe to run concurrently — only
@@ -211,7 +248,8 @@ async function getContributions(
   year: number,
 ): Promise<ContributionData> {
   const pad = (n: number) => String(n).padStart(2, "0");
-  const horizon = new Date(Date.now() + 2 * DAY_MS).toISOString().slice(0, 10);
+  const nowMs = Date.now();
+  const horizon = new Date(nowMs + 2 * DAY_MS).toISOString().slice(0, 10);
 
   const chunks = [];
   for (let month = 1; month <= 12; month += CHUNK_MONTHS) {
@@ -224,15 +262,15 @@ async function getContributions(
   }
 
   const results = await Promise.all(
-    chunks.map((c) =>
-      c.fromDate > horizon
-        ? Promise.resolve(zeroDays(c.fromDate, c.toDate))
-        : fetchCalendarRange(
-          username,
-          `${c.fromDate}T00:00:00Z`,
-          `${c.toDate}T23:59:59Z`,
-        )
-    ),
+    chunks.map(async (c) => {
+      if (c.fromDate > horizon) return zeroDays(c.fromDate, c.toDate);
+      const result = await fetchCalendarRange(
+        username,
+        `${c.fromDate}T00:00:00Z`,
+        chunkQueryTo(c.fromDate, c.toDate, nowMs),
+      );
+      return padTrailingDays(result, c.fromDate, c.toDate);
+    }),
   );
 
   return {
