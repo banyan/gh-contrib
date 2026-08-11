@@ -1,8 +1,10 @@
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import {
+  applyOverlay,
   chunkQueryTo,
   type ContributionData,
   formatContributionGraph,
+  overlayRange,
   padTrailingDays,
 } from "./main.ts";
 
@@ -167,4 +169,63 @@ Deno.test("padTrailingDays fills the whole range when nothing was returned", () 
     result.days.map((d) => d.date),
     ["2026-07-01", "2026-07-02", "2026-07-03"],
   );
+});
+
+Deno.test("overlayRange spans cutoff for any timezone and stays under a year", () => {
+  for (const iso of ["2026-08-11T02:57:00Z", "2026-12-31T23:59:59Z"]) {
+    const nowMs = Date.parse(iso);
+    const { from, to, cutoff } = overlayRange(nowMs);
+    // `from` at least 2 days back covers the cutoff day fully even at UTC-12
+    assert(Date.parse(from) <= nowMs - 2 * 24 * 60 * 60 * 1000);
+    assertEquals(from.slice(10), "T00:00:00Z");
+    assert(Date.parse(to) > nowMs);
+    assert(Date.parse(to) - Date.parse(from) < 365 * 24 * 60 * 60 * 1000);
+    assertEquals(
+      cutoff,
+      new Date(nowMs - 24 * 60 * 60 * 1000)
+        .toISOString().slice(0, 10),
+    );
+  }
+});
+
+Deno.test("overlayRange varies the date pair across close run times", () => {
+  const base = Date.parse("2026-08-11T02:57:00Z");
+  const keys = new Set(
+    [0, 1, 2, 3, 4].map((s) => {
+      const r = overlayRange(base + s * 1000);
+      return `${r.from}|${r.to}`;
+    }),
+  );
+  assert(keys.size > 1);
+});
+
+Deno.test("applyOverlay patches days on/after cutoff and adjusts the total", () => {
+  const data = makeData([
+    { date: "2026-08-09", count: 30 },
+    { date: "2026-08-10", count: 99 },
+    { date: "2026-08-11", count: 37 },
+  ]);
+  const overlayDays = [
+    // before cutoff: possibly cut mid-day by the range start — ignored
+    { date: "2026-08-09", contributionCount: 1, contributionLevel: "NONE" },
+    {
+      date: "2026-08-10",
+      contributionCount: 99,
+      contributionLevel: "FOURTH_QUARTILE",
+    },
+    {
+      date: "2026-08-11",
+      contributionCount: 51,
+      contributionLevel: "SECOND_QUARTILE",
+    },
+    // future zero-fill days not present in the fetched year are ignored
+    { date: "2026-08-12", contributionCount: 0, contributionLevel: "NONE" },
+  ];
+
+  const result = applyOverlay(data, overlayDays, "2026-08-10");
+  const days = result.weeks[0].contributionDays;
+
+  assertEquals(days.map((d) => d.contributionCount), [30, 99, 51]);
+  assertEquals(days[2].contributionLevel, "SECOND_QUARTILE");
+  assertEquals(result.totalContributions, 30 + 99 + 51);
 });

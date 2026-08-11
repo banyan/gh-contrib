@@ -201,14 +201,15 @@ function zeroDays(
   return { total: 0, days };
 }
 
-// GitHub caches contributionCalendar responses by the exact (user, from, to)
-// range for hours, so a chunk whose `to` sits at a fixed month end keeps
-// hitting the same stale cache entry and understates recent days. Clamping
-// `to` of the in-progress chunk to the current time changes the cache key
-// every run, which forces a fresh computation. The lower bound of one day
-// past the chunk start keeps the range valid (and the first day fully
-// covered) for a chunk that starts within the pre-fetch horizon but after
-// `now`.
+// GitHub caches contributionCalendar snapshots keyed by (user, from, to)
+// with the time-of-day stripped from BOTH endpoints, for hours. Clamping
+// the in-progress chunk's `to` to now therefore cannot freshen it within a
+// day — only the date part of the key matters — but it does give the chunk
+// a new cache key once per day, which bounds its staleness to roughly a
+// day. Same-day freshness for the most recent days comes from the overlay
+// query instead (see overlayRange). The lower bound of one day past the
+// chunk start keeps the range valid (and the first day fully covered) for
+// a chunk that starts within the pre-fetch horizon but after `now`.
 export function chunkQueryTo(
   fromDate: string,
   toDate: string,
@@ -238,6 +239,55 @@ export function padTrailingDays(
   return { total: result.total, days: [...result.days, ...fill.days] };
 }
 
+// Because the calendar cache key is date-granular, every run after the
+// day's first replays that first run's snapshot, freezing today's count.
+// The only reliable way to force a fresh computation is a (from, to) date
+// pair that has not been queried within the cache TTL. This picks `from` a
+// few days back and `to` a pseudo-random number of days into the future
+// (future days come back zero-filled and are dropped by the local today
+// filter), giving ~900 distinct keys — and both endpoints shift with the
+// date, so keys can only collide between runs on the same day, at ~1/900
+// odds. Days on/after `cutoff` (UTC yesterday) are fully covered by the
+// range for any profile timezone; the days before it may be cut mid-day by
+// the range start and must not be trusted.
+export function overlayRange(nowMs: number): {
+  from: string;
+  to: string;
+  cutoff: string;
+} {
+  const day = (offset: number) =>
+    new Date(nowMs + offset * DAY_MS).toISOString().slice(0, 10);
+  const idx = nowMs % 900;
+  return {
+    from: `${day(-2 - (idx % 3))}T00:00:00Z`,
+    to: `${day(1 + Math.floor(idx / 3))}T00:00:00Z`,
+    cutoff: day(-1),
+  };
+}
+
+// Overwrite the days on/after `cutoff` with the overlay's fresh counts and
+// adjust the total by the difference (the API total is the sum of its
+// days, so patching both keeps them consistent).
+export function applyOverlay(
+  data: ContributionData,
+  overlayDays: ContributionDay[],
+  cutoff: string,
+): ContributionData {
+  const fresh = new Map(
+    overlayDays.filter((d) => d.date >= cutoff).map((d) => [d.date, d]),
+  );
+  let total = data.totalContributions;
+  const weeks = data.weeks.map((week) => ({
+    contributionDays: week.contributionDays.map((day) => {
+      const patch = fresh.get(day.date);
+      if (!patch) return day;
+      total += patch.contributionCount - day.contributionCount;
+      return { ...patch };
+    }),
+  }));
+  return { totalContributions: total, weeks };
+}
+
 // Fetch the year as fixed 2-month chunks, all in parallel: individual
 // chunks stay far below the resource limit at any realistic contribution
 // volume (and cheap queries are safe to run concurrently — only
@@ -261,6 +311,13 @@ async function getContributions(
     });
   }
 
+  const overlay = overlayRange(nowMs);
+  const overlayNeeded = `${year}-12-31` >= overlay.cutoff &&
+    `${year}-01-01` <= horizon;
+  const overlayPromise = overlayNeeded
+    ? fetchCalendarRange(username, overlay.from, overlay.to)
+    : null;
+
   const results = await Promise.all(
     chunks.map(async (c) => {
       if (c.fromDate > horizon) return zeroDays(c.fromDate, c.toDate);
@@ -273,10 +330,12 @@ async function getContributions(
     }),
   );
 
-  return {
+  const data = {
     totalContributions: results.reduce((s, r) => s + r.total, 0),
     weeks: [{ contributionDays: results.flatMap((r) => r.days) }],
   };
+  if (!overlayPromise) return data;
+  return applyOverlay(data, (await overlayPromise).days, overlay.cutoff);
 }
 
 export function localToday(now: Date = new Date()): string {
