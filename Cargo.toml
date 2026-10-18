@@ -1,6 +1,6 @@
 [package]
 name = "gh-contrib"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 description = "Displays GitHub contribution history in the terminal using the gh CLI"
