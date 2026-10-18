@@ -5,7 +5,6 @@
 
 ## Prerequisites
 
-- [Deno](https://deno.land/)
 - [GitHub CLI (`gh`)](https://cli.github.com/) (authenticated)
 
 ## Installation
@@ -16,7 +15,8 @@
 gh extension install banyan/gh-contrib
 ```
 
-Then use it as:
+Releases ship precompiled binaries for macOS, Linux and Windows, so no
+toolchain is needed. Then use it as:
 
 ```bash
 gh contrib
@@ -25,7 +25,7 @@ gh contrib
 ### As a standalone CLI
 
 ```bash
-deno install -g --allow-run --allow-env jsr:@banyan/gh-contrib
+cargo install --git https://github.com/banyan/gh-contrib
 ```
 
 ## Update
@@ -39,7 +39,7 @@ gh extension upgrade gh-contrib
 ### As a standalone CLI
 
 ```bash
-deno install -grf jsr:@banyan/gh-contrib
+cargo install --force --git https://github.com/banyan/gh-contrib
 ```
 
 ## Usage
@@ -67,13 +67,26 @@ gh contrib --help                       # Show help
 
 ## Development
 
+Requires [Rust](https://rustup.rs/).
+
 ```bash
 # Run locally
-deno task dev
+cargo run -- --year 2025
 
 # Run tests
-deno task test
+cargo test
 ```
+
+### Releasing
+
+Bump `version` in `Cargo.toml`, commit, then push a `v<version>` tag. The
+Release workflow builds the binaries and publishes the GitHub release that
+`gh extension install` / `upgrade` pick up.
+
+> [!NOTE]
+> Versions up to 0.5.1 were written in Deno and published to JSR as
+> `@banyan/gh-contrib`. Deno's development ends in 2027, so 0.6.0 is a Rust
+> rewrite with the same output; the JSR package is no longer updated.
 
 ## License
 

@@ -1,2 +1,0 @@
-#!/usr/bin/env bash
-exec deno run --allow-run --allow-env --allow-write "$(dirname "$0")/main.ts" "$@"
