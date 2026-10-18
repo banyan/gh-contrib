@@ -48,6 +48,7 @@ cargo install --force --git https://github.com/banyan/gh-contrib
 gh contrib                              # Show current month's contributions
 gh contrib --year 2025                  # Show all of 2025
 gh contrib --year 2025 --month 6        # Show June 2025
+gh contrib --years                      # Show yearly totals since the first contribution
 gh contrib octocat                      # Show contributions for a specific user
 gh contrib --help                       # Show help
 ```
@@ -57,6 +58,7 @@ gh contrib --help                       # Show help
 ```
 --year <YYYY>   Year to display (default: current year)
 --month <MM>    Month to display (default: current month)
+--years         Show yearly totals since the first contribution
 -h, --help      Show help message
 ```
 

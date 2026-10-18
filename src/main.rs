@@ -46,6 +46,7 @@ Usage: gh-contrib [options] [username]
 Options:
   --year <YYYY>   Year to display (default: current year)
   --month <MM>    Month to display (default: current month)
+  --years         Show yearly totals since the first contribution
   -v, --version   Show version
   -h, --help      Show this help message
 
@@ -53,6 +54,7 @@ Examples:
   gh-contrib
   gh-contrib --year 2025
   gh-contrib --year 2025 --month 6
+  gh-contrib --years
   gh-contrib octocat
 ";
 
@@ -128,17 +130,25 @@ fn with_status_hint(message: String) -> String {
     }
 }
 
+/// Queries `contributionsCollection` for `range` (`from`, `to`), or for
+/// GitHub's default range (the last year) when it is `None`.
 fn fetch_contributions_collection(
     username: &str,
-    from: &str,
-    to: &str,
+    range: Option<(&str, &str)>,
     fields: &str,
 ) -> Result<Value, String> {
+    let (params, collection_args) = match range {
+        Some(_) => (
+            ", $from: DateTime!, $to: DateTime!",
+            "(from: $from, to: $to)",
+        ),
+        None => ("", ""),
+    };
     let query = format!(
         "
-    query($username: String!, $from: DateTime!, $to: DateTime!) {{
+    query($username: String!{params}) {{
       user(login: $username) {{
-        contributionsCollection(from: $from, to: $to) {{
+        contributionsCollection{collection_args} {{
           {fields}
         }}
       }}
@@ -146,18 +156,23 @@ fn fetch_contributions_collection(
   "
     );
 
-    let out = run_gh(&[
-        "api",
-        "graphql",
-        "-f",
-        &format!("query={query}"),
-        "-F",
-        &format!("username={username}"),
-        "-f",
-        &format!("from={from}"),
-        "-f",
-        &format!("to={to}"),
-    ])?;
+    let mut args = vec![
+        "api".to_string(),
+        "graphql".to_string(),
+        "-f".to_string(),
+        format!("query={query}"),
+        "-F".to_string(),
+        format!("username={username}"),
+    ];
+    if let Some((from, to)) = range {
+        args.extend([
+            "-f".to_string(),
+            format!("from={from}"),
+            "-f".to_string(),
+            format!("to={to}"),
+        ]);
+    }
+    let out = run_gh(&args.iter().map(String::as_str).collect::<Vec<_>>())?;
 
     if !out.success {
         let error_text = out.stderr.trim();
@@ -194,12 +209,11 @@ const CALENDAR_FIELDS: &str = "contributionCalendar {
 // RESOURCE_LIMITS_EXCEEDED. Bisection here is only a safety net for when a
 // single chunk somehow exceeds that; the normal path never triggers it.
 fn fetch_calendar_range(username: &str, from: &str, to: &str) -> Result<RangeResult, String> {
-    let result = fetch_contributions_collection(username, from, to, CALENDAR_FIELDS).and_then(
-        |mut collection| {
+    let result = fetch_contributions_collection(username, Some((from, to)), CALENDAR_FIELDS)
+        .and_then(|mut collection| {
             serde_json::from_value::<ContributionData>(collection["contributionCalendar"].take())
                 .map_err(|e| format!("Unexpected contributionCalendar shape: {e}"))
-        },
-    );
+        });
     let error = match result {
         Ok(calendar) => {
             return Ok(RangeResult {
@@ -414,6 +428,70 @@ fn get_contributions(username: &str, year: i32) -> Result<ContributionData, Stri
     })
 }
 
+fn fetch_contribution_years(username: &str) -> Result<Vec<i32>, String> {
+    let mut collection = fetch_contributions_collection(username, None, "contributionYears")?;
+    serde_json::from_value(collection["contributionYears"].take())
+        .map_err(|e| format!("Unexpected contributionYears shape: {e}"))
+}
+
+// Years are fetched the same way as the single-year view (2-month chunks
+// plus the overlay for the current year), so each line matches the header
+// of `--year <YYYY>`: GitHub's totals shift by a few contributions
+// depending on how the range is split, and a single full-year query would
+// disagree with it. Concurrency is capped so a long history does not fork
+// a hundred `gh` processes at once.
+const YEAR_WORKERS: usize = 8;
+
+fn get_yearly_totals(username: &str, current_year: i32) -> Result<Vec<(i32, i64)>, String> {
+    let years = fetch_contribution_years(username)?;
+    let Some(&first) = years.iter().min() else {
+        return Ok(vec![]);
+    };
+    let years: Vec<i32> = (first..=current_year.max(first)).collect();
+
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(vec![None; years.len()]);
+    std::thread::scope(|s| {
+        for _ in 0..YEAR_WORKERS.min(years.len()) {
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let Some(&year) = years.get(i) else { break };
+                    let total = get_contributions(username, year).map(|d| d.total_contributions);
+                    results.lock().expect("results lock poisoned")[i] = Some(total);
+                }
+            });
+        }
+    });
+
+    years
+        .iter()
+        .zip(results.into_inner().expect("results lock poisoned"))
+        .map(|(&year, total)| Ok((year, total.expect("every year was fetched")?)))
+        .collect()
+}
+
+pub fn format_yearly_totals(totals: &[(i32, i64)]) -> Vec<String> {
+    let sum: i64 = totals.iter().map(|(_, total)| total).sum();
+    let range = match (totals.first(), totals.last()) {
+        (Some((first, _)), Some((last, _))) if first != last => format!("{first}-{last}"),
+        (Some((year, _)), _) => year.to_string(),
+        _ => "total".to_string(),
+    };
+    let mut lines = vec![
+        String::new(),
+        format!("📊 {sum} contributions in {range}"),
+        String::new(),
+    ];
+    lines.extend(
+        totals
+            .iter()
+            .map(|(year, total)| format!("{year}: {total}")),
+    );
+    lines.push(String::new());
+    lines
+}
+
 fn last_day_of_month(year: i32, month: u32) -> u32 {
     let (next_year, next_month) = if month == 12 {
         (year + 1, 1)
@@ -533,6 +611,7 @@ fn fail(message: &str) -> ! {
 struct Args {
     year: Option<String>,
     month: Option<String>,
+    years: bool,
     help: bool,
     version: bool,
     positional: Vec<String>,
@@ -555,6 +634,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match flag.as_str() {
             "-h" | "--help" => args.help = true,
             "-v" | "--version" => args.version = true,
+            "--years" => args.years = true,
             "--year" | "--month" => {
                 let value = match inline_value {
                     Some(v) => v,
@@ -590,6 +670,10 @@ fn main() {
         return;
     }
 
+    if args.years && (args.year.is_some() || args.month.is_some()) {
+        fail("--years cannot be combined with --year or --month");
+    }
+
     let now = Local::now();
     let year = match &args.year {
         Some(y) => y
@@ -615,10 +699,16 @@ fn main() {
     let mut spinner = Spinner::new(format!("Fetching contributions for @{username}..."));
     spinner.start();
 
-    match get_contributions(&username, year) {
-        Ok(data) => {
+    let lines = if args.years {
+        get_yearly_totals(&username, year).map(|totals| format_yearly_totals(&totals))
+    } else {
+        get_contributions(&username, year)
+            .map(|data| format_contribution_graph(&data, year, month, &local_today()))
+    };
+    match lines {
+        Ok(lines) => {
             spinner.succeed(&format!("Fetched contributions for @{username}"));
-            for line in format_contribution_graph(&data, year, month, &local_today()) {
+            for line in lines {
                 println!("{line}");
             }
         }
@@ -710,6 +800,15 @@ mod tests {
         let data = make_data(&[("2025-01-01", 1)], Some(999));
         let lines = format_contribution_graph(&data, 2025, Some(1), "2025-12-31");
         assert!(has(&lines, "📊 999 contributions in 2025"));
+    }
+
+    #[test]
+    fn yearly_view_lists_each_year_with_the_overall_total() {
+        let lines = format_yearly_totals(&[(2024, 10), (2025, 0), (2026, 5)]);
+        assert!(has(&lines, "📊 15 contributions in 2024-2026"));
+        assert!(has(&lines, "2024: 10"));
+        assert!(has(&lines, "2025: 0"));
+        assert!(has(&lines, "2026: 5"));
     }
 
     #[test]
@@ -882,6 +981,7 @@ mod tests {
         );
         assert!(parse(&["-h"]).unwrap().help);
         assert!(parse(&["--version"]).unwrap().version);
+        assert!(parse(&["--years"]).unwrap().years);
         assert!(parse(&["--year"]).is_err());
         assert!(parse(&["--dashboard"]).is_err());
     }
